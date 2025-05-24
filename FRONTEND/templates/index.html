@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>NER Demo</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="container">
+    <h1>Demo NER</h1>
+
+    <label for="text-input">Pega aquí tu texto:</label>
+    <textarea id="text-input" placeholder="Ctrl + V para pegar…" rows="10"></textarea>
+
+    <button id="analyze-btn">Analizar entidades</button>
+
+    <div id="results" class="results hidden"></div>
+  </div>
+
+  <script>
+    const apiURL = "http://localhost:8000/ner";       // Cambia si tu API vive en otro host/puerto
+    const btn    = document.getElementById("analyze-btn");
+    const area   = document.getElementById("text-input");
+    const panel  = document.getElementById("results");
+
+    btn.addEventListener("click", async () => {
+      const text = area.value.trim();
+      if (!text) { alert("El texto está vacío."); return; }
+
+      btn.disabled = true;
+      btn.textContent = "Analizando…";
+
+      try {
+        const resp = await fetch(apiURL, {
+          method : "POST",
+          headers: { "Content-Type": "application/json" },
+          body   : JSON.stringify({ text })
+        });
+        if (!resp.ok) throw new Error(`Error API: ${resp.status}`);
+
+        const data = await resp.json();  // {entities:[…]}
+
+        // Agrupar por entity_group
+        const grouped = {};
+        for (const e of data.entities) {
+          (grouped[e.entity_group] ||= []).push(e.word);
+        }
+
+        // Construir HTML resultado
+        panel.innerHTML = "";                       // Vacía resultado anterior
+        for (const [group, words] of Object.entries(grouped)) {
+          const section = document.createElement("section");
+          section.className = "group";
+
+          const h2 = document.createElement("h2");
+          h2.textContent = group;
+          section.appendChild(h2);
+
+          const ul = document.createElement("ul");
+          for (const w of words) {
+            const li = document.createElement("li");
+            li.textContent = w;
+            ul.appendChild(li);
+          }
+          section.appendChild(ul);
+          panel.appendChild(section);
+        }
+        panel.classList.remove("hidden");
+        panel.scrollIntoView({ behavior: "smooth" });
+
+      } catch (err) {
+        console.error(err);
+        alert("Hubo un problema al llamar a la API. Revisa la consola.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Analizar entidades";
+      }
+    });
+  </script>
+</body>
+</html>

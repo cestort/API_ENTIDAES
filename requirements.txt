@@ -1,7 +1,18 @@
-fastapi
-uvicorn
-transformers
-torch
-spacy
-spacy-transformers
-en-core-web-trf
+# ────────── Core ──────────
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.2
+
+# ────────── NLP / Transformers ──────────
+transformers==4.41.0
+torch==2.2.2
+sentencepiece==0.1.99
+numpy==1.26.4
+accelerate==0.29.3
+
+#------- FRONTEND ──────────
+flask-3.1.1
+
+# ────────── (Opcional si hay gpu) ──────────
+# pip install --index-url https://download.pytorch.org/whl/cu121 \
+# torch==2.2.2+cu121

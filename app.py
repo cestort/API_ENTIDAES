@@ -12,14 +12,15 @@ Robust NER API – v9
 from __future__ import annotations
 import os, re, pathlib
 from typing import List, Set, Dict, Any, Optional
-
+import torch
 from fastapi import FastAPI, HTTPException, Header, Depends, status
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+from fastapi.middleware.cors import CORSMiddleware
 
 # ────────── Config ──────────
 MODEL_DIR      = os.getenv("MODEL_DIR", "models")
-DEVICE         = int(os.getenv("CUDA_DEVICE", "0"))
+DEVICE = 0 if torch.cuda.is_available() else -1
 STRIDE_TOKENS  = int(os.getenv("STRIDE_TOKENS", "200"))
 MIN_SCORE      = float(os.getenv("MIN_SCORE", "0.5"))
 MIN_LENGTH     = int(os.getenv("MIN_LENGTH", "3"))
@@ -73,6 +74,21 @@ class Patch(BaseModel):
 
 # ────────── FastAPI ──────────
 app = FastAPI(title="Robust NER API (v9)")
+
+# ─── CORS ───
+origins = [
+    "http://localhost:5000",   # Flask (o cualquier host donde sirvas el frontend)
+    "http://127.0.0.1:5000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,    # solo si usas cookies/autenticación
+    allow_methods=["*"],       # "GET", "POST"… o "*"
+    allow_headers=["*"],       # "Content-Type", "Authorization"… o "*"
+)
+
 def _auth(tok:str=Header(None,alias="Authorization")):
     if tok!=f"Bearer {ADMIN_TOKEN}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
