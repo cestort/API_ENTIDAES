@@ -1,12 +1,11 @@
 #!/usr/bin/env python
 # coding: utf-8
 """
-Robust NER API – v9
+Robust NER API – v9 (CORREGIDA)
 ────────────────────────────────────────────────────────────────────────
-✓ Filtros de confianza, longitud, listas, gentilicios, blacklist dinámica
-✓ Stop-words dinámicos para MISC + chequeo token-a-token
-✓ Filtro “span truncado” (última palabra ≤ 5 letras) mejorado
-────────────────────────────────────────────────────────────────────────
+✓ CORS funcional para frontend
+✓ Soporte OPTIONS /ner para evitar errores preflight
+✓ Token Bearer obligatorio
 """
 
 from __future__ import annotations
@@ -17,10 +16,11 @@ from fastapi import FastAPI, HTTPException, Header, Depends, status
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 # ────────── Config ──────────
 MODEL_DIR      = os.getenv("MODEL_DIR", "models")
-DEVICE = 0 if torch.cuda.is_available() else -1
+DEVICE         = 0 if torch.cuda.is_available() else -1
 STRIDE_TOKENS  = int(os.getenv("STRIDE_TOKENS", "200"))
 MIN_SCORE      = float(os.getenv("MIN_SCORE", "0.5"))
 MIN_LENGTH     = int(os.getenv("MIN_LENGTH", "3"))
@@ -31,38 +31,33 @@ ADMIN_TOKEN    = os.getenv("ADMIN_TOKEN", "changeme")
 SEP_TOKENS   = {",", ";", "–", "-", "—"}
 AND_PATTERNS = {" and ", " & "}
 
-# ────────── Gentilicios ──────────
 DEMONYM_SUFFIXES = ("ian","ean","ite","ish","ic","tian","ese","i","an","chi","ard")
 _DEM_RE  = re.compile(rf"^[A-Z][a-z]+({'|'.join(DEMONYM_SUFFIXES)})$")
 def _is_demonym(txt:str)->bool:
-    if _DEM_RE.match(txt): return True                 # simple
-    if "-" in txt:                                     # compuesto
+    if _DEM_RE.match(txt): return True
+    if "-" in txt:
         a,_,b = txt.partition("-")
         return _DEM_RE.match(a) or _DEM_RE.match(b)
     return False
 
-# ────────── Limpieza ──────────
 _CLEAN_RE = re.compile(r"""^[\s([\{«"'‐-‒–—-]+|[\s)\]}»"'‐-‒–—.]+$""")
 def _clean_word(t:str)->str:
     return _CLEAN_RE.sub("", t).strip()
 
-# ────────── Ruido MISC ──────────
 _MISC_STOPWORDS: Set[str] = {
     "album","producer","year","nobel","laure","laureate",
     "ostinato","parallel"
 }
-_WHITELIST_SHORT = {"lake","wars"}   # palabras cortas válidas
+_WHITELIST_SHORT = {"lake","wars"}
 
 def _is_noise_misc(span:str)->bool:
     tokens = re.split(r"[ \-]", span.lower())
     if any(tok in _MISC_STOPWORDS for tok in tokens):
         return True
     last = tokens[-1]
-    if len(last)<=5 and last not in _WHITELIST_SHORT:
-        return True
-    return False
+    return len(last)<=5 and last not in _WHITELIST_SHORT
 
-# ────────── Pydantic ──────────
+# ────────── Esquemas ──────────
 class NERRequest(BaseModel):
     text:str
 class Entity(BaseModel):
@@ -72,27 +67,24 @@ class NERResponse(BaseModel):
 class Patch(BaseModel):
     add:Optional[List[str]]=None; remove:Optional[List[str]]=None
 
-# ────────── FastAPI ──────────
+# ────────── App FastAPI ──────────
 app = FastAPI(title="Robust NER API (v9)")
 
-# ─── CORS ───
-origins = [
-    "http://localhost:5000",   # Flask (o cualquier host donde sirvas el frontend)
-    "http://127.0.0.1:5000",
-]
-
+# CORS – ABIERTO PARA DESARROLLO
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,    # solo si usas cookies/autenticación
-    allow_methods=["*"],       # "GET", "POST"… o "*"
-    allow_headers=["*"],       # "Content-Type", "Authorization"… o "*"
+    allow_origins=["*"],  # Cambiar en producción
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Autenticación por token
 def _auth(tok:str=Header(None,alias="Authorization")):
     if tok!=f"Bearer {ADMIN_TOKEN}":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED)
 
+# ────────── Modelo ──────────
 tokenizer=model=nlp=None
 def _load_pipe():
     global tokenizer,model,nlp
@@ -113,9 +105,10 @@ def _save_blacklist():
 
 @app.on_event("startup")
 def _startup():
-    _load_pipe(); _load_blacklist()
+    _load_pipe()
+    _load_blacklist()
 
-# ────────── Helpers ──────────
+# ────────── Utilidades ──────────
 def _has_blocking_sep(frag:str)->bool:
     lower=frag.lower()
     return any(sep in frag for sep in SEP_TOKENS) or any(p in lower for p in AND_PATTERNS)
@@ -138,7 +131,6 @@ def _force_merge(prev,nxt,txt):
         return ", davis" in frag and prev["word"].endswith("University of California")
     return False
 
-# ────────── Post-process ──────────
 def post_process(raw:List[Dict[str,Any]],txt:str)->List[Dict[str,Any]]:
     ents=[e for e in raw if e["score"]>=MIN_SCORE and len(e["word"])>=MIN_LENGTH]
     ents.sort(key=lambda e:e["start"])
@@ -163,32 +155,37 @@ def post_process(raw:List[Dict[str,Any]],txt:str)->List[Dict[str,Any]]:
         final.extend(_split_composite(m,txt))
     return list({(e["start"],e["end"]):e for e in final}.values())
 
-# ────────── API ──────────
-@app.post("/ner",response_model=NERResponse)
+# ────────── ENDPOINTS ──────────
+@app.post("/ner", response_model=NERResponse)
 def ner(req:NERRequest):
     if not req.text.strip():
         raise HTTPException(400,"El campo 'text' no puede estar vacío")
     clean=post_process(nlp(req.text),req.text)
     return NERResponse(entities=[Entity(**e) for e in clean])
 
-# ────────── Admin ──────────
-@app.get("/admin/blacklist",dependencies=[Depends(_auth)],response_model=List[str])
+@app.options("/ner")  # Soluciona error OPTIONS preflight
+def ner_options():
+    return JSONResponse(status_code=200)
+
+@app.get("/admin/blacklist", dependencies=[Depends(_auth)], response_model=List[str])
 def bl_get(): return sorted(BLACKLIST)
-@app.post("/admin/blacklist",dependencies=[Depends(_auth)],response_model=List[str])
+
+@app.post("/admin/blacklist", dependencies=[Depends(_auth)], response_model=List[str])
 def bl_patch(p:Patch):
     if p.add: BLACKLIST.update(t.lower() for t in p.add)
     if p.remove: BLACKLIST.difference_update(t.lower() for t in p.remove)
     _save_blacklist(); return sorted(BLACKLIST)
 
-@app.get("/admin/misc_stopwords",dependencies=[Depends(_auth)],response_model=List[str])
+@app.get("/admin/misc_stopwords", dependencies=[Depends(_auth)], response_model=List[str])
 def sw_get(): return sorted(_MISC_STOPWORDS)
-@app.post("/admin/misc_stopwords",dependencies=[Depends(_auth)],response_model=List[str])
+
+@app.post("/admin/misc_stopwords", dependencies=[Depends(_auth)], response_model=List[str])
 def sw_patch(p:Patch):
     if p.add: _MISC_STOPWORDS.update(t.lower() for t in p.add)
     if p.remove: _MISC_STOPWORDS.difference_update(t.lower() for t in p.remove)
     return sorted(_MISC_STOPWORDS)
 
-# ────────── Local run ──────────
-if __name__=="__main__":
+# ────────── Run Local ──────────
+if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app",host="0.0.0.0",port=8000)
+    uvicorn.run("app:app", host="0.0.0.0", port=7999)

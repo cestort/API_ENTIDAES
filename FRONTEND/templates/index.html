@@ -2,52 +2,125 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
-  <title>NER Demo</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <title>Demo NER</title>
+  <style>
+    body {
+      background: #1e1e1e;
+      color: #f0f0f0;
+      font-family: sans-serif;
+      padding: 2rem;
+    }
+    .container {
+      max-width: 900px;
+      margin: auto;
+      background: #2c2c2c;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.4);
+    }
+    h1 {
+      color: #00f2ff;
+      text-align: center;
+    }
+    textarea {
+      width: 100%;
+      min-height: 200px;
+      background: #111;
+      color: #eee;
+      border: 1px solid #555;
+      padding: 1rem;
+      border-radius: 8px;
+      font-size: 1rem;
+      resize: vertical;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.7rem 1.2rem;
+      font-size: 1rem;
+      background-color: #007acc;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    section.group {
+      margin-top: 2rem;
+      border-top: 1px solid #444;
+      padding-top: 1rem;
+    }
+    section.group h2 {
+      color: #00f2ff;
+    }
+    ul {
+      padding-left: 1rem;
+    }
+    li {
+      background: #3c3c3c;
+      margin: 0.3rem 0;
+      padding: 0.5rem;
+      border-radius: 5px;
+    }
+    .hidden {
+      display: none;
+    }
+  </style>
 </head>
 <body>
   <div class="container">
     <h1>Demo NER</h1>
-
     <label for="text-input">Pega aquí tu texto:</label>
-    <textarea id="text-input" placeholder="Ctrl + V para pegar…" rows="10"></textarea>
-
+    <textarea id="text-input" placeholder="Ctrl + V para pegar…"></textarea>
     <button id="analyze-btn">Analizar entidades</button>
 
     <div id="results" class="results hidden"></div>
   </div>
 
   <script>
-    const apiURL = "http://localhost:8000/ner";       // Cambia si tu API vive en otro host/puerto
+    const apiURL = "http://localhost:7999/ner";
+    const token  = "changeme";
     const btn    = document.getElementById("analyze-btn");
     const area   = document.getElementById("text-input");
     const panel  = document.getElementById("results");
 
     btn.addEventListener("click", async () => {
       const text = area.value.trim();
-      if (!text) { alert("El texto está vacío."); return; }
+      if (!text) {
+        alert("El texto está vacío.");
+        return;
+      }
 
       btn.disabled = true;
       btn.textContent = "Analizando…";
+      panel.innerHTML = "";
+      panel.classList.add("hidden");
 
       try {
         const resp = await fetch(apiURL, {
-          method : "POST",
-          headers: { "Content-Type": "application/json" },
-          body   : JSON.stringify({ text })
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${token}`
+          },
+          body: JSON.stringify({ text })
         });
+
         if (!resp.ok) throw new Error(`Error API: ${resp.status}`);
+        const data = await resp.json();
+        console.log("Entidades recibidas:", data.entities);
 
-        const data = await resp.json();  // {entities:[…]}
-
-        // Agrupar por entity_group
-        const grouped = {};
-        for (const e of data.entities) {
-          (grouped[e.entity_group] ||= []).push(e.word);
+        if (!data.entities.length) {
+          panel.innerHTML = "<p>No se encontraron entidades.</p>";
+          panel.classList.remove("hidden");
+          return;
         }
 
-        // Construir HTML resultado
-        panel.innerHTML = "";                       // Vacía resultado anterior
+        // Agrupar por tipo
+        const grouped = {};
+        data.entities.forEach(e => {
+          if (!grouped[e.entity_group]) grouped[e.entity_group] = [];
+          grouped[e.entity_group].push(e.word);
+        });
+
         for (const [group, words] of Object.entries(grouped)) {
           const section = document.createElement("section");
           section.className = "group";
@@ -57,20 +130,22 @@
           section.appendChild(h2);
 
           const ul = document.createElement("ul");
-          for (const w of words) {
+          [...new Set(words)].forEach(w => {
             const li = document.createElement("li");
             li.textContent = w;
             ul.appendChild(li);
-          }
+          });
+
           section.appendChild(ul);
           panel.appendChild(section);
         }
+
         panel.classList.remove("hidden");
         panel.scrollIntoView({ behavior: "smooth" });
 
       } catch (err) {
         console.error(err);
-        alert("Hubo un problema al llamar a la API. Revisa la consola.");
+        alert("Error al contactar con la API. Revisa consola.");
       } finally {
         btn.disabled = false;
         btn.textContent = "Analizar entidades";
